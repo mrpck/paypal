@@ -7,7 +7,7 @@ Copy the files under `src/` to your program
 OR
 
 ```bash
-composer require mrpck/paypal
+composer require mrpck/paypal 1.0.0
 ```
 
 
