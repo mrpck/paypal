@@ -1,5 +1,5 @@
 # mysqldb
-The MySqlDB Class Library is a high level wrapper around the MySql.
+The PayPal Class Library is a high level wrapper around the PayPal REST API.
 
 ## Install
 Copy the files under `src/` to your program
@@ -7,7 +7,7 @@ Copy the files under `src/` to your program
 OR
 
 ```bash
-composer require websvc/php-mysql-db 1.0.2
+composer require mrpck/paypal
 ```
 
 
