@@ -18,8 +18,10 @@ class PayPal
 	var $token     = '';
 	var $requestId = '';
 	var $paypalId  = '';
-	var $status = '';
-	var $planId = '';
+	var $status    = '';
+    var $productId = '';
+	var $planId    = '';
+    var $subId     = '';
 
 	/**
 	* Constructor
@@ -41,6 +43,8 @@ class PayPal
     function __destruct() 
 	{
         // closing connection...
+        $this->token = '';
+        $this->connected = false;
     }
 	
 	function IsConnected()
@@ -73,8 +77,75 @@ class PayPal
             "request_id" => $this->requestId
         ));
     }
+
+    /** 1. CREATE A PRODUCT
+	 *
+     * Plan: {"id":"P-3WM27231DU1309943MAZIMJA","status":"ACTIVE","link":""}
+     */
+	function CreateProduct($data)
+    {
+		if (empty($this->token)) {
+			$req = json_decode($this->GetAccessToken(), true);
+			if (is_array($req) && isset($req['token']))
+				$this->token = $req['token'];
+		}
+
+		if (empty($this->token))
+			return null;
+
+        $url = $this->host.'/v1/catalogs/products';
+        $httpHeader = array(
+            'Content-Type: application/json',
+            'Authorization: Bearer '.$this->token,
+            'PayPal-Request-Id: PLAN-'. $this->requestId
+        );
+
+        $result = json_decode($this->callAPI('POST', $url, json_encode($data), $httpHeader), true);
+        //echo '<pre>'; var_dump($result); echo '</pre>'; die;
+        if (!isset($result['id'])) {
+            //$this->log->Error(json_encode($result['details']));
+            return json_encode(["status" => "fail", "message" => $result['details']], 200);
+        }
+
+        $this->productId  = $result['id'];
+        //return json_encode($result);
+        return $this->productId;
+    }
+
+    /** 2. CREATE A PLAN
+	 *
+     */
+	function CreatePlan($data)
+    {
+		if (empty($this->token)) {
+			$req = json_decode($this->GetAccessToken(), true);
+			if (is_array($req) && isset($req['token']))
+				$this->token = $req['token'];
+		}
+
+		if (empty($this->token))
+			return null;
+
+        $url = $this->host.'/v1/billing/plans';
+        $httpHeader = array(
+            'Content-Type: application/json',
+            'Authorization: Bearer '.$this->token,
+            'PayPal-Request-Id: PLAN-'. $this->requestId
+        );
+
+        $result = json_decode($this->callAPI('POST', $url, json_encode($data), $httpHeader), true);
+        echo '<pre>'; var_dump($result); echo '</pre>'; die;
+        if (!isset($result['id'])) {
+            //$this->log->Error(json_encode($result['details']));
+            return json_encode(["status" => "fail", "message" => $result['details']], 200);
+        }
+
+        $this->planId = $result['id'];
+        //return json_encode($result);
+        return $this->planId;
+    }
 	
-	/** CREATE A SUBSCRIPTION
+	/** 3. CREATE A SUBSCRIPTION
 	 *
      * If activate subscription succeeds, it triggers the BILLING.SUBSCRIPTION.CREATED webhook.
      */
@@ -88,21 +159,18 @@ class PayPal
 
 		if (empty($this->token))
 			return null;
-		
-        $token = $this->token;
-        $request_id = $this->requestId;
 
         $url = $this->host.'/v1/billing/subscriptions';
         $httpHeader = array(
             'Content-Type: application/json',
-            'Authorization: Bearer '.$token,
-            'PayPal-Request-Id: SUBSCRIPTION-'. $request_id
+            'Authorization: Bearer '.$this->token,
+            'PayPal-Request-Id: SUBSCRIPTION-'. $this->requestId
         );
 
         $result = json_decode($this->callAPI('POST', $url, json_encode($data), $httpHeader), true);
         //echo '<pre>'; var_dump($result); echo '</pre>'; die;
         if (!isset($result['id'])) {
-            $this->log->Error(json_encode($result['details']));
+            //$this->log->Error(json_encode($result['details']));
             return json_encode(["status" => "fail", "message" => $result['details']], 200);
         }
 
@@ -112,12 +180,15 @@ class PayPal
                 $link_approve = $link['href'];
         }
 
+        $this->subId    = $result['id'];
 		$this->paypalId = $result['id'];
 		$this->status   = $result['status'];
+        if (empty($link_approve))
+            return $this->subId;
         return json_encode(array(
             "id" => $result['id'],
             "status" => $result['status'],
-            "link" => $link_approve
+            "link"   => $link_approve
         ));
     }
 	
@@ -132,36 +203,24 @@ class PayPal
 				$this->token = $req['token'];
 		}
 
-		if (empty($this->token))
+		if (empty($this->token) || empty($paypal_id))
 			return null;
-		
-        $token = $this->token;
-        $request_id = $this->requestId;
 
         $url = $this->host.'/v1/billing/subscriptions/'.$paypal_id;
         $httpHeader = array(
             'Content-Type: application/json',
-            'Authorization: Bearer '.$token,
-            'PayPal-Request-Id: SUBSCRIPTION-'. $request_id
+            'Authorization: Bearer '.$this->token
         );
 
         $result = json_decode($this->callAPI('GET', $url, null, $httpHeader), true);
         //echo '<pre>'; var_dump($result); echo '</pre>'; die;
-        if (!isset($result['id'])) {
-            $this->log->Error(json_encode($result['details']));
-            return json_encode(["status" => "fail", "message" => $result['details']], 200);
-        }
-		
+        if (empty($result) || !isset($result['id']))
+            return null;
+
 		$this->paypalId = $paypal_id;
 		$this->status   = $result['status'];
 		$this->planId   = $result['plan_id'];
 		return json_encode($result);
-
-        return json_encode(array(
-            "id" => $result['id'],
-            "status" => $result['status'],
-            "link" => $link_approve
-        ));
     }
 	
 	/** GET A STATUS SUBSCRIPTION
@@ -183,19 +242,102 @@ class PayPal
 			return $this->status;
 
 		$req = json_decode($this->GetSubscription($paypal_id), true);
-		return $req['status'];
+		return !empty($req) ? $req['status'] : null;
 	}
-	
-	/** GET A PLAN SUBSCRIPTION
+
+    /** GET A PRODUCT
 	 *
      */
-	function GetPlan($paypal_id)
+	function GetProductById($product_id)
     {
-		if ($this->paypalId == $paypal_id && !empty($this->planId))
-			return $this->planId;
+        if (empty($this->token)) {
+			$req = json_decode($this->GetAccessToken(), true);
+			if (is_array($req) && isset($req['token']))
+				$this->token = $req['token'];
+		}
 
-		$req = json_decode($this->GetSubscription($paypal_id), true);
-		return $req['plan_id'];
+		if (empty($this->token) || empty($product_id))
+			return null;
+
+        $url = $this->host.'/v1/catalogs/products/'.$product_id;
+        $httpHeader = array(
+            'Content-Type: application/json',
+            'Authorization: Bearer '.$this->token
+        );
+
+        $result = json_decode($this->callAPI('GET', $url, null, $httpHeader), true);
+        //echo '<pre>'; var_dump($result); echo '</pre>'; die;
+        if (empty($result) || !isset($result['id']))
+            return null;
+
+		$this->productId = $result['id'];
+		return json_encode($result);
+	}
+	
+	/** GET A PLAN
+	 *
+     */
+	function GetPlanById($plan_id)
+    {
+        if (empty($this->token)) {
+			$req = json_decode($this->GetAccessToken(), true);
+			if (is_array($req) && isset($req['token']))
+				$this->token = $req['token'];
+		}
+
+		if (empty($this->token) || empty($plan_id))
+			return null;
+
+        $url = $this->host.'/v1/billing/plans/'.$plan_id;
+        $httpHeader = array(
+            'Content-Type: application/json',
+            'Authorization: Bearer '.$this->token
+        );
+
+        $result = json_decode($this->callAPI('GET', $url, null, $httpHeader), true);
+        //echo '<pre>'; var_dump($result); echo '</pre>'; die;
+        if (empty($result) || !isset($result['id']))
+            return null;
+
+		$this->status = $result['status'];
+		$this->planId = $plan_id;
+		return json_encode($result);
+	}
+
+    /** GET A PLAN SUBSCRIPTION
+	 *
+     */
+	function GetPlanBySubId($sub_id)
+    {
+        if (empty($this->token)) {
+			$req = json_decode($this->GetAccessToken(), true);
+			if (is_array($req) && isset($req['token']))
+				$this->token = $req['token'];
+		}
+
+		if (empty($this->token) || empty($sub_id))
+			return null;
+
+		$req = json_decode($this->GetSubscription($sub_id), true);
+		$plan_id = !empty($req) ? $req['plan_id'] : null;
+
+        if (empty($plan_id))
+            return null;
+
+        $url = $this->host.'/v1/billing/plans/'.$plan_id;
+        $httpHeader = array(
+            'Content-Type: application/json',
+            'Authorization: Bearer '.$this->token
+        );
+
+        $result = json_decode($this->callAPI('GET', $url, null, $httpHeader), true);
+        //echo '<pre>'; var_dump($result); echo '</pre>'; die;
+        if (empty($result) || !isset($result['id']))
+            return null;
+
+		$this->status = $result['status'];
+		$this->planId = $plan_id;
+		return json_encode($result);
 	}
 	
 	/** GET A STATUS SUBSCRIPTION
@@ -207,7 +349,7 @@ class PayPal
 			return $this->status == 'ACTIVE';
 
 		$req = json_decode($this->GetSubscription($paypal_id), true);
-		return $req['status'] == 'ACTIVE';
+		return !empty($req) && $req['status'] == 'ACTIVE';
 	}
 	
 	/** ACTIVATE A SUBSCRIPTION
@@ -224,15 +366,12 @@ class PayPal
 
 		if (empty($this->token))
 			return null;
-		
-        $token = $this->token;
-        $request_id = $this->requestId;
 
         $url = $this->host.'/v1/billing/subscriptions/'.$paypal_id.'/activate';
         $httpHeader = array(
             'Content-Type: application/json',
-            'Authorization: Bearer '.$token,
-            'PayPal-Request-Id: SUBSCRIPTION-'. $request_id
+            'Authorization: Bearer '.$this->token,
+            'PayPal-Request-Id: SUBSCRIPTION-'. $this->requestId
         );
 
 		$data = array(
@@ -240,9 +379,9 @@ class PayPal
         );
 
         $result = json_decode($this->callAPI('POST', $url, json_encode($data), $httpHeader), true);
-        echo '<pre>'; var_dump($result); echo '</pre>'; die;
+        //echo '<pre>'; var_dump($result); echo '</pre>'; die;
         if (!isset($result['id'])) {
-            $this->log->Error(json_encode($result['details']));
+            //$this->log->Error(json_encode($result['details']));
             return json_encode(["status" => "fail", "message" => $result['details']], 200);
         }
 
@@ -276,14 +415,11 @@ class PayPal
 		if (empty($this->token))
 			return null;
 
-        $token = $this->token;
-		//$host = env('PAYPAL_URL'); //str_replace("api.sandbox", "api-m.sandbox", env('PAYPAL_URL'));
-		//$host = str_replace("api.sandbox", "api-m.sandbox", env('PAYPAL_URL'));
 		$url = $this->host.'/v1/billing/subscriptions/'.$paypal_id.'/cancel';
 
         $httpHeader = array(
             'Content-Type: application/json',
-            'Authorization: Bearer '.$token
+            'Authorization: Bearer '.$this->token
         );
 		
 		$data = array(
@@ -297,7 +433,7 @@ class PayPal
 				//return response()->json(["status" => "fail", "message" => $result['details']], 200);
 			}
 		} catch (\Exception $e) {
-			$this->log->Error($e->getMessage());
+			//$this->log->Error($e->getMessage());
 		}
 
         return json_encode(["status" => "success", "message" => 'Your subscription has been successfully canceled'], 200);
@@ -338,7 +474,10 @@ class PayPal
     
         // EXECUTE:
         $result = curl_exec($ch);
-        if(!$result){die("Connection Failure");}
+        if(!$result){
+            //die("Connection Failure");
+            return null;
+        }
         curl_close($ch);
 
         return $result;
@@ -346,18 +485,17 @@ class PayPal
 	
 	private function fakeip()  
     {  
-        return long2ip( mt_rand(0, 65537) * mt_rand(0, 65535) );   
+        return long2ip(mt_rand(0, 65537) * mt_rand(0, 65535));   
     }
 	
 	private function randomPassword($length=8, $toupper=false, $alphanumeric=true)
     {
-        //$alphabet = "abcdefghijklmnopqrstuwxyzABCDEFGHIJKLMNOPQRSTUWXYZ0123456789";
         $alphabet = "abcdefghjklmnpqrstuwxyzABCDEFGHJKLMNPQRSTUWXYZ23456789";
-        if (!$alphanumeric){
+        if (!$alphanumeric)
             $alphabet = "123456789";
-        }
-        $pass = array(); //remember to declare $pass as an array
-        $alphaLength = strlen($alphabet) - 1; //put the length -1 in cache
+
+        $pass = array();
+        $alphaLength = strlen($alphabet) - 1;
         for ($i=0; $i<$length; $i++){
             $n = rand(0,$alphaLength);
             $pass[] = $alphabet[$n];
