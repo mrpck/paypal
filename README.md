@@ -1,4 +1,4 @@
-# mysqldb
+# paypal
 The PayPal Class Library is a high level wrapper around the PayPal REST API.
 
 ## Install
